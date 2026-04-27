@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/ -v)",
+      "Bash(python -c \"import sys; print\\(sys.executable\\); print\\(sys.version\\)\")",
+      "Bash(python -m pip install -e .)",
+      "Bash(python -m pip install pytest pytest-cov)",
+      "Bash(python -m pytest tests/)",
+      "Bash(python -m pytest tests/test_gui.py -v)",
+      "Bash(python -c ' *)"
+    ]
+  }
+}

@@ -15,7 +15,6 @@ keywords = ["spike-detection", "electrophysiology", "dtw", "template-matching", 
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
@@ -24,18 +23,17 @@ classifiers = [
     "Topic :: Scientific/Engineering",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "matplotlib>=3.7",
+]
 
 [project.urls]
 Homepage = "https://github.com/maxwellsdm1867/spikeDetection"
 Repository = "https://github.com/maxwellsdm1867/spikeDetection"
 "Bug Tracker" = "https://github.com/maxwellsdm1867/spikeDetection/issues"
 Documentation = "https://github.com/maxwellsdm1867/spikeDetection/tree/master/docs"
-
-dependencies = [
-    "numpy>=1.24",
-    "scipy>=1.10",
-    "matplotlib>=3.7",
-]
 
 [project.optional-dependencies]
 fast = [

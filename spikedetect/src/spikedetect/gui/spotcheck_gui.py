@@ -8,12 +8,15 @@ and add or remove spikes from the detection result.
 from __future__ import annotations
 
 from copy import deepcopy
+from typing import Callable
 
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
-from spikedetect.gui._widgets import raster_ticks, blocking_wait
+from spikedetect.gui._widgets import (
+    raster_ticks, blocking_wait, install_finish_handlers,
+)
 from spikedetect.models import (
     Recording, SpikeDetectionParams, SpikeDetectionResult,
 )
@@ -66,6 +69,30 @@ class SpotCheckGUI:
         self._scat_out = None
         self._raster_lines = None
 
+        self._finished = False
+        self._disconnect_handlers: Callable[[], None] | None = None
+        # Callbacks for non-blocking (e.g. Qt) embedding.
+        self.on_finished: Callable[[SpikeDetectionResult], None] | None = None
+        self.on_spike_index_changed: Callable[[int], None] | None = None
+
+    def setup(self):
+        """Build the figure without starting an event loop. See
+        :meth:`FilterGUI.setup` for details.
+
+        Returns:
+            The figure's canvas.
+        """
+        if self.fig is not None:
+            return self.fig.canvas
+        self._setup()
+        self._build_figure()
+        if self.result.n_spikes > 0:
+            self._show_current_spike()
+        self._disconnect_handlers = install_finish_handlers(
+            self.fig, self._on_key, self._finish,
+        )
+        return self.fig.canvas
+
     def run(self) -> SpikeDetectionResult:
         """Display the GUI and block until the user finishes.
 
@@ -80,35 +107,56 @@ class SpotCheckGUI:
         Returns:
             Updated result with spot_checked set to True.
         """
-        self._setup()
-        self._build_figure()
+        self.setup()
 
         if self.result.n_spikes == 0:
-            if plt.fignum_exists(self.fig.number):
-                plt.close(self.fig)
-            self.result.spot_checked = True
+            self._finish()
             return self.result
 
-        self._show_current_spike()
+        while not self._finished:
+            blocking_wait(self.fig)
+            # All key dispatch happens in _on_key, which calls _finish
+            # for Enter; the wait returns when _finish stops the loop.
 
-        while True:
-            key = blocking_wait(self.fig)
-            if key is None or key in ("enter", "return"):
-                break
+        self.close()
+        return self.result
 
-            action = self._handle_key(key)
-            if action == "done":
-                break
+    def finish(self) -> None:
+        """Programmatically signal that the user is done. Idempotent."""
+        self._finish()
 
-        if plt.fignum_exists(self.fig.number):
+    def close(self) -> None:
+        """Disconnect handlers and close the figure. Idempotent."""
+        if self._disconnect_handlers is not None:
+            self._disconnect_handlers()
+            self._disconnect_handlers = None
+        if self.fig is not None and plt.fignum_exists(self.fig.number):
             plt.close(self.fig)
 
-        # Build final result from accepted spikes
-        self.result.spike_times = np.sort(
-            self._spikes[self._accepted]
-        ).astype(np.int64)
+    def _on_key(self, key: str | None) -> None:
+        if key in ("enter", "return"):
+            self._finish()
+            return
+        if self._spikes is None or len(self._spikes) == 0:
+            return
+        self._handle_key(key)
+
+    def _finish(self) -> None:
+        if self._finished:
+            return
+        self._finished = True
+        # Build final result from accepted spikes.
+        if self._spikes is not None and self._accepted is not None and len(self._spikes) > 0:
+            self.result.spike_times = np.sort(
+                self._spikes[self._accepted]
+            ).astype(np.int64)
         self.result.spot_checked = True
-        return self.result
+        try:
+            self.fig.canvas.stop_event_loop()
+        except Exception:
+            pass
+        if self.on_finished is not None:
+            self.on_finished(self.result)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -641,3 +689,5 @@ class SpotCheckGUI:
         elif self._spike_idx >= len(self._spikes):
             self._spike_idx = len(self._spikes) - 1
         self._show_current_spike()
+        if self.on_spike_index_changed is not None:
+            self.on_spike_index_changed(self._spike_idx)

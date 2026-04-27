@@ -494,3 +494,95 @@ class TestInteractiveWorkflow:
     def test_ask_done_function_exists(self):
         from spikedetect.gui.workflow import _ask_done
         assert callable(_ask_done)
+
+
+# ---------------------------------------------------------------------------
+# Non-blocking entry points (for embedding in Qt host apps)
+# ---------------------------------------------------------------------------
+
+class TestNonBlockingAPI:
+    """Verify each GUI's setup() / on_finished / close() contract.
+
+    Hosts that embed these GUIs (e.g. a PyQt browser app) drive their
+    own event loop, so the GUI must not call start_event_loop. Instead,
+    setup() builds the figure and installs handlers, the host adds the
+    canvas to a layout, and on_finished fires when the user accepts.
+    """
+
+    def test_filter_gui_setup_returns_canvas(self, synthetic_data, params):
+        voltage, _, _ = synthetic_data
+        gui = FilterGUI(voltage, params)
+        canvas = gui.setup()
+        assert canvas is not None
+        assert canvas is gui.fig.canvas
+
+    def test_filter_gui_on_finished_fires(self, synthetic_data, params):
+        voltage, _, _ = synthetic_data
+        gui = FilterGUI(voltage, params)
+        received = []
+        gui.on_finished = received.append
+        gui.setup()
+        gui.finish()
+        assert len(received) == 1
+        assert received[0] is gui.params
+
+    def test_filter_gui_finish_is_idempotent(self, synthetic_data, params):
+        voltage, _, _ = synthetic_data
+        gui = FilterGUI(voltage, params)
+        received = []
+        gui.on_finished = received.append
+        gui.setup()
+        gui.finish()
+        gui.finish()
+        gui.close()
+        gui.close()
+        assert len(received) == 1
+
+    def test_filter_gui_on_params_changed_fires(self, synthetic_data, params):
+        voltage, _, _ = synthetic_data
+        gui = FilterGUI(voltage, params)
+        received = []
+        gui.on_params_changed = received.append
+        gui.setup()
+        gui._sl_hp.set_val(300.0)
+        assert len(received) >= 1
+        assert received[-1].hp_cutoff == 300.0
+
+    def test_template_gui_on_finished_fires(self, filtered, params_with_template):
+        filt, _ = filtered
+        gui = TemplateSelectionGUI(filt, params_with_template)
+        received = []
+        gui.on_finished = received.append
+        gui.setup()
+        gui.finish()
+        assert len(received) == 1
+        # No selection made -> template is None
+        assert received[0] is None
+
+    def test_threshold_gui_on_finished_fires(self, match_result, params_with_template):
+        gui = ThresholdGUI(match_result, params_with_template)
+        received = []
+        gui.on_finished = received.append
+        gui.setup()
+        gui.finish()
+        assert len(received) == 1
+        assert received[0] is gui.params
+
+    def test_threshold_gui_b_key_toggles_active(self, match_result, params_with_template):
+        gui = ThresholdGUI(match_result, params_with_template)
+        gui.setup()
+        assert gui._active_threshold == "distance"
+        gui._on_key("b")
+        assert gui._active_threshold == "amplitude"
+        gui._on_key("b")
+        assert gui._active_threshold == "distance"
+
+    def test_spotcheck_gui_on_finished_fires(self, recording_and_result):
+        rec, result = recording_and_result
+        gui = SpotCheckGUI(rec, result)
+        received = []
+        gui.on_finished = received.append
+        gui.setup()
+        gui.finish()
+        assert len(received) == 1
+        assert received[0].spot_checked is True

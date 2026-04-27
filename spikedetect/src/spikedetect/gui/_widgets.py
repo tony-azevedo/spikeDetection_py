@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Callable
+
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
@@ -49,6 +51,45 @@ def raster_ticks(
     if picker is not None:
         lines.set_picker(picker)
     return [lines]
+
+
+def install_finish_handlers(
+    fig: Figure,
+    on_key: Callable[[str], None],
+    on_close: Callable[[], None],
+) -> Callable[[], None]:
+    """Connect key-press and close handlers without starting an event loop.
+
+    Companion to :func:`blocking_wait` for non-blocking embedding.
+    The caller is responsible for driving the event loop (either by
+    calling :func:`blocking_wait` afterwards for standalone use, or
+    by letting a host Qt/Tk app drive it).
+
+    Args:
+        fig: The figure to attach handlers to.
+        on_key: Called with ``event.key`` on every key press.
+        on_close: Called with no arguments when the figure is closed.
+
+    Returns:
+        A zero-argument function that disconnects both handlers.
+    """
+    def _on_key(event):
+        on_key(event.key)
+
+    def _on_close(_event):
+        on_close()
+
+    cid_key = fig.canvas.mpl_connect("key_press_event", _on_key)
+    cid_close = fig.canvas.mpl_connect("close_event", _on_close)
+
+    def disconnect() -> None:
+        try:
+            fig.canvas.mpl_disconnect(cid_key)
+            fig.canvas.mpl_disconnect(cid_close)
+        except Exception:
+            pass
+
+    return disconnect
 
 
 def blocking_wait(fig: Figure) -> str | None:

@@ -8,12 +8,15 @@ threshold lines. Waveform panels show good/weird/bad categories.
 from __future__ import annotations
 
 from copy import deepcopy
+from typing import Callable
 
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
-from spikedetect.gui._widgets import raster_ticks, blocking_wait
+from spikedetect.gui._widgets import (
+    raster_ticks, blocking_wait, install_finish_handlers,
+)
 from spikedetect.models import SpikeDetectionParams
 from spikedetect.pipeline.classify import classify_spikes
 from spikedetect.pipeline.template import TemplateMatchResult
@@ -40,6 +43,27 @@ class ThresholdGUI:
         self.params = deepcopy(params)
         self.fig = None
         self._active_threshold = "distance"  # or "amplitude"
+        self._finished = False
+        self._disconnect_handlers: Callable[[], None] | None = None
+        # Callbacks for non-blocking (e.g. Qt) embedding.
+        self.on_finished: Callable[[SpikeDetectionParams], None] | None = None
+        self.on_thresholds_changed: Callable[[float, float], None] | None = None
+
+    def setup(self):
+        """Build the figure without starting an event loop. See
+        :meth:`FilterGUI.setup` for details.
+
+        Returns:
+            The figure's canvas.
+        """
+        if self.fig is not None:
+            return self.fig.canvas
+        self._build_figure()
+        self._update_panels()
+        self._disconnect_handlers = install_finish_handlers(
+            self.fig, self._on_key, self._finish,
+        )
+        return self.fig.canvas
 
     def run(self) -> SpikeDetectionParams:
         """Display the GUI and block until the user finishes.
@@ -52,20 +76,46 @@ class ThresholdGUI:
         Returns:
             Updated parameters with new threshold values.
         """
-        self._build_figure()
-        self._update_panels()
+        self.setup()
 
         while True:
             key = blocking_wait(self.fig)
             if key is None or key in ("enter", "return"):
                 break
-            if key == "b":
-                self._toggle_active()
+            # 'b' toggle is dispatched in _on_key so it works in both
+            # blocking and non-blocking modes.
 
-        if plt.fignum_exists(self.fig.number):
+        self.close()
+        return self.params
+
+    def finish(self) -> None:
+        """Programmatically signal that the user is done. Idempotent."""
+        self._finish()
+
+    def close(self) -> None:
+        """Disconnect handlers and close the figure. Idempotent."""
+        if self._disconnect_handlers is not None:
+            self._disconnect_handlers()
+            self._disconnect_handlers = None
+        if self.fig is not None and plt.fignum_exists(self.fig.number):
             plt.close(self.fig)
 
-        return self.params
+    def _on_key(self, key: str | None) -> None:
+        if key in ("enter", "return"):
+            self._finish()
+        elif key == "b":
+            self._toggle_active()
+
+    def _finish(self) -> None:
+        if self._finished:
+            return
+        self._finished = True
+        try:
+            self.fig.canvas.stop_event_loop()
+        except Exception:
+            pass
+        if self.on_finished is not None:
+            self.on_finished(self.params)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -130,6 +180,11 @@ class ThresholdGUI:
             else:
                 self.params.amplitude_threshold = float(event.ydata)
             self._update_panels()
+            if self.on_thresholds_changed is not None:
+                self.on_thresholds_changed(
+                    self.params.distance_threshold,
+                    self.params.amplitude_threshold,
+                )
         elif event.inaxes == self._ax_mean:
             self._update_template_from_mean()
 

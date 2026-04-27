@@ -9,11 +9,12 @@ cross-correlation aligned and averaged to produce the spike template.
 from __future__ import annotations
 
 from copy import deepcopy
+from typing import Callable
 
 import numpy as np
 import matplotlib.pyplot as plt
 
-from spikedetect.gui._widgets import blocking_wait
+from spikedetect.gui._widgets import blocking_wait, install_finish_handlers
 from spikedetect.models import SpikeDetectionParams
 from spikedetect.pipeline.peaks import find_spike_locations
 
@@ -38,6 +39,27 @@ class TemplateSelectionGUI:
         self.params = deepcopy(params)
         self.fig = None
         self._selected_indices: list[int] = []
+        self._finished = False
+        self._template: np.ndarray | None = None
+        self._disconnect_handlers: Callable[[], None] | None = None
+        # Callbacks for non-blocking (e.g. Qt) embedding.
+        self.on_finished: Callable[[np.ndarray | None], None] | None = None
+        self.on_selection_changed: Callable[[int], None] | None = None
+
+    def setup(self):
+        """Build the figure without starting an event loop. See
+        :meth:`FilterGUI.setup` for details.
+
+        Returns:
+            The figure's canvas.
+        """
+        if self.fig is not None:
+            return self.fig.canvas
+        self._build_figure()
+        self._disconnect_handlers = install_finish_handlers(
+            self.fig, self._on_key, self._finish,
+        )
+        return self.fig.canvas
 
     def run(self) -> np.ndarray | None:
         """Display the GUI and block until the user presses Enter.
@@ -46,19 +68,47 @@ class TemplateSelectionGUI:
             The averaged spike template waveform, or None if no
             spikes were selected.
         """
-        self._build_figure()
+        self.setup()
 
         while True:
             key = blocking_wait(self.fig)
             if key is None or key in ("enter", "return"):
                 break
 
-        template = self._build_template()
+        # Build template synchronously for blocking callers; close()
+        # will skip the rebuild because we set self._template here.
+        self._template = self._build_template()
+        self.close()
+        return self._template
 
-        if plt.fignum_exists(self.fig.number):
+    def finish(self) -> None:
+        """Programmatically signal that the user is done. Idempotent."""
+        self._finish()
+
+    def close(self) -> None:
+        """Disconnect handlers and close the figure. Idempotent."""
+        if self._disconnect_handlers is not None:
+            self._disconnect_handlers()
+            self._disconnect_handlers = None
+        if self.fig is not None and plt.fignum_exists(self.fig.number):
             plt.close(self.fig)
 
-        return template
+    def _on_key(self, key: str | None) -> None:
+        if key in ("enter", "return"):
+            self._finish()
+
+    def _finish(self) -> None:
+        if self._finished:
+            return
+        self._finished = True
+        if self._template is None:
+            self._template = self._build_template()
+        try:
+            self.fig.canvas.stop_event_loop()
+        except Exception:
+            pass
+        if self.on_finished is not None:
+            self.on_finished(self._template)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -136,6 +186,8 @@ class TemplateSelectionGUI:
             )
 
         self.fig.canvas.draw_idle()
+        if self.on_selection_changed is not None:
+            self.on_selection_changed(len(self._selected_indices))
 
     def _build_template(self) -> np.ndarray | None:
         """Build averaged template from selected spike waveforms.

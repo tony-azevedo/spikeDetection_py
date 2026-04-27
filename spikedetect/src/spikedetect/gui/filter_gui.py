@@ -8,12 +8,15 @@ a polarity toggle button. Filtered data and detected peaks update live.
 from __future__ import annotations
 
 from copy import deepcopy
+from typing import Callable
 
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, RadioButtons, Button
 
-from spikedetect.gui._widgets import raster_ticks, blocking_wait
+from spikedetect.gui._widgets import (
+    raster_ticks, blocking_wait, install_finish_handlers,
+)
 from spikedetect.models import SpikeDetectionParams
 from spikedetect.pipeline.filtering import filter_data
 from spikedetect.pipeline.peaks import find_spike_locations
@@ -41,6 +44,37 @@ class FilterGUI:
         self.fig = None
         self._filtered = None
         self._locs = None
+        self._finished = False
+        self._disconnect_handlers: Callable[[], None] | None = None
+        # User-supplied callbacks for non-blocking (e.g. Qt) embedding.
+        self.on_finished: Callable[[SpikeDetectionParams], None] | None = None
+        self.on_params_changed: Callable[[SpikeDetectionParams], None] | None = None
+
+    def setup(self):
+        """Build the figure and install handlers without starting an event loop.
+
+        Use this when embedding the GUI in a host application that
+        drives its own event loop (e.g. a PyQt window). The host
+        should set ``MPLBACKEND=QtAgg`` (or call
+        ``matplotlib.use("QtAgg")``) before importing matplotlib so
+        that the returned canvas is a ``FigureCanvasQTAgg`` ready
+        to embed in a Qt layout.
+
+        Set ``self.on_finished`` (and optionally ``self.on_params_changed``)
+        before or after this call to receive the result.
+
+        Returns:
+            The figure's canvas (e.g. ``FigureCanvasQTAgg``).
+        """
+        if self.fig is not None:
+            return self.fig.canvas
+        self._apply_filter()
+        self._build_figure()
+        self._update_plots()
+        self._disconnect_handlers = install_finish_handlers(
+            self.fig, self._on_key, self._finish,
+        )
+        return self.fig.canvas
 
     def run(self) -> SpikeDetectionParams:
         """Display the GUI and block until the user presses Enter.
@@ -49,9 +83,7 @@ class FilterGUI:
             Updated parameters reflecting the user's slider
             choices.
         """
-        self._apply_filter()
-        self._build_figure()
-        self._update_plots()
+        self.setup()
 
         # Block until keypress
         while True:
@@ -59,10 +91,38 @@ class FilterGUI:
             if key is None or key in ("enter", "return"):
                 break
 
-        if plt.fignum_exists(self.fig.number):
+        self.close()
+        return self.params
+
+    def finish(self) -> None:
+        """Programmatically signal that the user is done.
+
+        Useful from a host's "Finish" button. Idempotent.
+        """
+        self._finish()
+
+    def close(self) -> None:
+        """Disconnect handlers and close the figure. Idempotent."""
+        if self._disconnect_handlers is not None:
+            self._disconnect_handlers()
+            self._disconnect_handlers = None
+        if self.fig is not None and plt.fignum_exists(self.fig.number):
             plt.close(self.fig)
 
-        return self.params
+    def _on_key(self, key: str | None) -> None:
+        if key in ("enter", "return"):
+            self._finish()
+
+    def _finish(self) -> None:
+        if self._finished:
+            return
+        self._finished = True
+        try:
+            self.fig.canvas.stop_event_loop()
+        except Exception:
+            pass
+        if self.on_finished is not None:
+            self.on_finished(self.params)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -148,12 +208,14 @@ class FilterGUI:
         self.params.peak_threshold = 10 ** self._sl_thresh.val
         self._apply_filter()
         self._update_plots()
+        self._notify_params_changed()
 
     def _on_diff_change(self, label: str) -> None:
         """Callback for diff order radio button."""
         self.params.diff_order = int(label)
         self._apply_filter()
         self._update_plots()
+        self._notify_params_changed()
 
     def _on_polarity_toggle(self, _event) -> None:
         """Callback for polarity toggle button."""
@@ -161,6 +223,11 @@ class FilterGUI:
         self._btn_pol.label.set_text(f"Pol: {self.params.polarity:+d}")
         self._apply_filter()
         self._update_plots()
+        self._notify_params_changed()
+
+    def _notify_params_changed(self) -> None:
+        if self.on_params_changed is not None:
+            self.on_params_changed(self.params)
 
     def _update_plots(self) -> None:
         """Redraw the filtered data and peak markers."""

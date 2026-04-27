@@ -8,107 +8,26 @@ Python package (`spikedetect`) for detecting and sorting neural/EMG spikes from 
 
 The original MATLAB code is at [tony-azevedo/spikeDetection](https://github.com/tony-azevedo/spikeDetection) for reference.
 
-## Installation and Dependencies
+## Installation and Test Commands
 
-The Python package lives in the `spikedetect/` subdirectory. All install commands must be run from there.
-
-### Prerequisites
-
-- **Python >= 3.9** (check: `python --version`)
-- **pip** (check: `pip --version`)
-- If the user doesn't have Python, recommend [Anaconda](https://www.anaconda.com/download) or [Miniconda](https://docs.conda.io/en/latest/miniconda.html)
-
-### Install Commands
+The Python package lives in the `spikedetect/` subdirectory — all `pip` and `pytest` commands must be run from there. See [README.md](README.md) for the full install matrix (extras: `[io]` for `.abf`/HDF5, `[fast]` for numba, `[dev]` for pytest+ruff, `[all]`) and common installation issues.
 
 ```bash
-# IMPORTANT: cd into the spikedetect/ subdirectory first
 cd spikedetect
-
-# Basic install (core detection pipeline)
-pip install -e .
-
-# With development tools (for running tests)
 pip install -e ".[dev]"
 
-# With ABF and HDF5 file support
-pip install -e ".[io]"
-
-# With numba acceleration for faster DTW
-pip install -e ".[fast]"
-
-# Everything at once
-pip install -e ".[all]"
-```
-
-### Required Dependencies (auto-installed by pip)
-
-| Package | Min Version | What it's for |
-|---------|-------------|---------------|
-| numpy | >= 1.24 | Array operations, all numerical computation |
-| scipy | >= 1.10 | Butterworth filters (`scipy.signal`), peak finding, .mat file I/O |
-| matplotlib | >= 3.7 | Plotting, all interactive GUIs |
-
-### Optional Dependencies
-
-| Extra | Packages | When to install |
-|-------|----------|-----------------|
-| `[io]` | `pyabf >= 2.3`, `h5py >= 3.8` | User has `.abf` files (Axon Binary Format) or MATLAB v7.3 HDF5 `.mat` files |
-| `[fast]` | `numba >= 0.57`, `dtaidistance >= 2.3` | Large datasets where DTW speed matters. Falls back to pure numpy if not installed. |
-| `[dev]` | `pytest >= 7.3`, `pytest-cov >= 4.0`, `ruff >= 0.1` | Running tests, linting |
-| `[all]` | All of the above | Full install |
-
-### Optional User Dependencies (not in pyproject.toml)
-
-| Package | When needed |
-|---------|-------------|
-| `pandas` | Only if user calls `result.to_dataframe()` to export spike times as a DataFrame |
-| `ipympl` | Only for Jupyter notebook GUI interaction (`%matplotlib widget` backend) |
-
-### Common Installation Issues
-
-1. **numba/numpy version mismatch**: If the user sees `_ARRAY_API not found` or `compiled using NumPy 1.x cannot be run in NumPy 2.x` warnings — this is harmless, the pipeline falls back to pure numpy. Fix options:
-   - `pip uninstall numba` (remove numba, pure numpy is fine)
-   - `pip install numpy<2` (downgrade numpy)
-   - `pip install numba --upgrade` (upgrade numba to match numpy 2)
-
-2. **h5py not installed**: If loading a MATLAB v7.3 .mat file fails with `ImportError: h5py`, run `pip install h5py>=3.8` or `pip install -e ".[io]"`
-
-3. **pyabf not installed**: If loading a .abf file fails with `ImportError: pyabf`, run `pip install pyabf>=2.3` or `pip install -e ".[io]"`
-
-4. **Jupyter GUIs not interactive**: If GUI widgets don't respond in Jupyter, the user needs: `pip install ipympl` and `%matplotlib widget` at the top of the notebook
-
-5. **Package not found after install**: Make sure install was run from `spikedetect/` subdirectory (not the repo root). The `pyproject.toml` is at `spikedetect/pyproject.toml`.
-
-### Verify Installation
-
-```bash
-# Quick check
-python -c "import spikedetect; print(spikedetect.__version__)"
-# Should print: 0.1.0
-
-# Full verification (run tests)
-cd spikedetect && python -m pytest tests/ -v
-# Should show: 135 passed
-```
-
-## Build and Test Commands
-
-```bash
-# IMPORTANT: run from the spikedetect/ subdirectory
-cd spikedetect
-
-# Run all tests
+# Tests (115 currently pass; 28 cross-validation tests skip without the .mat file)
 python -m pytest tests/ -v
-
-# Run a single test file
 python -m pytest tests/test_dtw.py -v
-
-# Run a specific test
 python -m pytest tests/test_pipeline.py::TestDetectSpikes::test_detects_embedded_spikes -v
-
-# Run with coverage
 python -m pytest tests/ --cov=spikedetect --cov-report=term-missing
 ```
+
+### Non-obvious gotchas
+
+- **numba/numpy version mismatch warnings** (`_ARRAY_API not found`) are harmless — the pipeline falls back to pure numpy. If you must silence: `pip uninstall numba` or pin `numpy<2`.
+- **Jupyter interactivity** requires `pip install ipympl` plus `%matplotlib widget` at the top of the notebook.
+- **`pip install -e .` from the repo root fails** — `pyproject.toml` is at `spikedetect/pyproject.toml`, not the root.
 
 ## Architecture
 
@@ -133,11 +52,15 @@ spikedetect/src/spikedetect/
 │   ├── classify.py      # SpikeClassifier — quantile-based 4-category classification
 │   └── detect.py        # SpikeDetector — full pipeline orchestrator
 └── gui/
+    ├── _widgets.py      # Shared helpers (raster_ticks, blocking_wait, install_finish_handlers)
     ├── filter_gui.py    # FilterGUI — interactive filter parameter tuning
     ├── template_gui.py  # TemplateSelectionGUI — click to select seed spikes
     ├── threshold_gui.py # ThresholdGUI — DTW/amplitude scatter threshold adjustment
-    └── spotcheck_gui.py # SpotCheckGUI — spike-by-spike review
+    ├── spotcheck_gui.py # SpotCheckGUI — spike-by-spike review
+    └── workflow.py      # InteractiveWorkflow — orchestrates Filter→Template→Threshold→SpotCheck
 ```
+
+Each GUI exposes both a blocking `run()` (for standalone use) and a non-blocking `setup()` + `on_finished` callback pair (for embedding in a host Qt event loop). See [docs/QT_INTEGRATION.md](docs/QT_INTEGRATION.md). `InteractiveWorkflow.run()` is blocking-only; embedding the chained workflow in Qt is the host's job (a worked example is in the integration doc).
 
 ### Detection Pipeline (SpikeDetector.detect)
 
@@ -149,14 +72,14 @@ spikedetect/src/spikedetect/
 
 ### Class-Based Design
 
-All pipeline functions are organized as static methods within classes. Each module also exports backwards-compatible function aliases (e.g., `filter_data = SignalFilter.filter_data`) so both styles work:
+All pipeline functions are organized as static methods within classes. Each pipeline module also exports backwards-compatible function aliases (e.g., `filter_data = SignalFilter.filter_data`), but **only the classes are re-exported from the top-level package**. The function aliases are reachable only through the submodule path:
 
 ```python
-# Class-based (preferred)
+# Class-based (preferred — top-level import works)
 from spikedetect import SignalFilter, SpikeDetector
 filtered = SignalFilter.filter_data(voltage, fs=10000, hp_cutoff=200, lp_cutoff=800)
 
-# Function alias (backwards-compatible)
+# Function alias (must import from the submodule, NOT from spikedetect directly)
 from spikedetect.pipeline.filtering import filter_data
 filtered = filter_data(voltage, fs=10000, hp_cutoff=200, lp_cutoff=800)
 ```
@@ -189,14 +112,19 @@ The cross-validation test suite (`test_cross_validation.py`, 18 tests) loads MAT
 ## Directory Layout
 
 - `spikedetect/` — Python package (installable via pip)
+  - `examples/` — Runnable scripts: `batch_detection.py`, `gui_workflow.py`, `gui_demo.ipynb`. Fastest way to see the package end-to-end.
+  - `DATA_FORMAT_SPEC.md` — Formal IO specification: data models, file formats, and how to write a translator from any acquisition frontend
+  - `MIGRATION_GUIDE.md` — MATLAB-to-Python function/parameter mapping
+- `docs/` — User-facing documentation:
+  - `GETTING_STARTED.md` — Install + first-spike walkthrough
+  - `USER_GUIDE.md` — Full parameter/pipeline/GUI reference
+  - `QT_INTEGRATION.md` — How to embed the GUIs in a host PyQt/PySide app (non-blocking API)
+  - `GUI_PERFORMANCE.md` — Design doc for GUI perf optimization (forward-looking)
+  - `CHANGELOG.md` — What's changed and what's new vs MATLAB
 - `matlab_reference/` — Original MATLAB code for reference
   - `functions/` — MATLAB pipeline functions
   - `utils/` — MATLAB utility functions
   - `scripts/cross_validate_pipeline.m` — Script to regenerate cross-validation intermediates
 - `cross_validation_intermediates.mat` — MATLAB pipeline intermediates for cross-validation tests
 - `CROSS_VALIDATION_REPORT.md` — Detailed cross-validation findings
-- `LICENSE` — Project license
-
-Key documentation inside `spikedetect/`:
-- `DATA_FORMAT_SPEC.md` — Formal IO specification: data models, file formats, and how to write a translator from any acquisition frontend
-- `MIGRATION_GUIDE.md` — MATLAB-to-Python function/parameter mapping
+- `README.md`, `LICENSE` — Project README and license
