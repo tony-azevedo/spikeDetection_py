@@ -12,7 +12,7 @@ from typing import Callable
 
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.widgets import Slider, RadioButtons, Button
+from matplotlib.widgets import Slider, RadioButtons, Button, TextBox
 
 from spikedetect.gui._widgets import (
     raster_ticks, blocking_wait, install_finish_handlers,
@@ -70,6 +70,7 @@ class FilterGUI:
             return self.fig.canvas
         self._apply_filter()
         self._build_figure()
+        self._center_window()
         self._update_plots()
         self._disconnect_handlers = install_finish_handlers(
             self.fig, self._on_key, self._finish,
@@ -194,12 +195,23 @@ class FilterGUI:
         pol_label = f"Pol: {self.params.polarity:+d}"
         self._btn_pol = Button(ax_pol, pol_label)
 
+        # Peak threshold precision controls (arrow buttons + text box)
+        ax_arrow_left = self.fig.add_axes([0.88, 0.02, 0.03, 0.03])
+        self._btn_arrow_left = Button(ax_arrow_left, u"\u25C4")  # left arrow
+        ax_arrow_right = self.fig.add_axes([0.93, 0.02, 0.03, 0.03])
+        self._btn_arrow_right = Button(ax_arrow_right, u"\u25BA")  # right arrow
+        ax_text = self.fig.add_axes([0.88, 0.07, 0.08, 0.03])
+        self._txt_thresh = TextBox(ax_text, "Value:", initial="")
+
         # Connect callbacks
         self._sl_hp.on_changed(self._on_slider_change)
         self._sl_lp.on_changed(self._on_slider_change)
         self._sl_thresh.on_changed(self._on_slider_change)
         self._radio_diff.on_clicked(self._on_diff_change)
         self._btn_pol.on_clicked(self._on_polarity_toggle)
+        self._btn_arrow_left.on_clicked(self._on_arrow_left)
+        self._btn_arrow_right.on_clicked(self._on_arrow_right)
+        self._txt_thresh.on_submit(self._on_text_submit)
 
     def _on_slider_change(self, _val) -> None:
         """Callback for any slider change."""
@@ -224,6 +236,79 @@ class FilterGUI:
         self._apply_filter()
         self._update_plots()
         self._notify_params_changed()
+
+    def _on_arrow_left(self, _event) -> None:
+        """Decrease peak threshold by 10% when left arrow is clicked."""
+        current = self.params.peak_threshold
+        new_val = current * 0.9  # decrease by 10%
+        self.params.peak_threshold = new_val
+        # Update slider to match (convert to log10 scale)
+        log_thresh = np.log10(max(new_val, 1e-10))
+        self._sl_thresh.set_val(log_thresh)
+        self._apply_filter()
+        self._update_plots()
+        self._notify_params_changed()
+
+    def _on_arrow_right(self, _event) -> None:
+        """Increase peak threshold by 10% when right arrow is clicked."""
+        current = self.params.peak_threshold
+        new_val = current * 1.1  # increase by 10%
+        self.params.peak_threshold = new_val
+        # Update slider to match (convert to log10 scale)
+        log_thresh = np.log10(max(new_val, 1e-10))
+        self._sl_thresh.set_val(log_thresh)
+        self._apply_filter()
+        self._update_plots()
+        self._notify_params_changed()
+
+    def _on_text_submit(self, text: str) -> None:
+        """Apply threshold value from text box when Enter is pressed."""
+        try:
+            val = float(text)
+            if val > 0:
+                self.params.peak_threshold = val
+                # Update slider to match (convert to log10 scale)
+                log_thresh = np.log10(max(val, 1e-10))
+                self._sl_thresh.set_val(log_thresh)
+                self._apply_filter()
+                self._update_plots()
+                self._notify_params_changed()
+        except ValueError:
+            pass  # Ignore invalid input
+
+    def _center_window(self) -> None:
+        """Center the figure window on the screen."""
+        try:
+            # Get the backend's window
+            manager = plt.get_current_fig_manager()
+            # Try different backends
+            if hasattr(manager, 'window'):
+                # TkAgg backend
+                window = manager.window
+                window.update_idletasks()
+                # Get screen dimensions
+                screen_width = window.winfo_screenwidth()
+                screen_height = window.winfo_screenheight()
+                # Get window dimensions
+                win_width = window.winfo_width()
+                win_height = window.winfo_height()
+                # Calculate center position
+                x = (screen_width - win_width) // 2
+                y = (screen_height - win_height) // 2
+                window.geometry(f"+{x}+{y}")
+            elif hasattr(manager, 'canvas'):
+                # Try Qt backends
+                canvas = manager.canvas
+                if hasattr(canvas, 'parent'):
+                    parent = canvas.parent()
+                    if parent is not None:
+                        parent.move(
+                            parent.x() + (parent.width() - self.fig.get_figwidth() * self.fig.dpi) // 2,
+                            parent.y() + (parent.height() - self.fig.get_figheight() * self.fig.dpi) // 2
+                        )
+        except Exception:
+            # Silently fail if window centering is not supported
+            pass
 
     def _notify_params_changed(self) -> None:
         if self.on_params_changed is not None:

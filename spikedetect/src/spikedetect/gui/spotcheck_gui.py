@@ -88,6 +88,7 @@ class SpotCheckGUI:
         self._build_figure()
         if self.result.n_spikes > 0:
             self._show_current_spike()
+        self._center_window()
         self._disconnect_handlers = install_finish_handlers(
             self.fig, self._on_key, self._finish,
         )
@@ -157,6 +158,32 @@ class SpotCheckGUI:
             pass
         if self.on_finished is not None:
             self.on_finished(self.result)
+
+    def _center_window(self) -> None:
+        """Center the figure window on the screen."""
+        try:
+            manager = plt.get_current_fig_manager()
+            if hasattr(manager, 'window'):
+                window = manager.window
+                window.update_idletasks()
+                screen_width = window.winfo_screenwidth()
+                screen_height = window.winfo_screenheight()
+                win_width = window.winfo_width()
+                win_height = window.winfo_height()
+                x = (screen_width - win_width) // 2
+                y = (screen_height - win_height) // 2
+                window.geometry(f"+{x}+{y}")
+            elif hasattr(manager, 'canvas'):
+                canvas = manager.canvas
+                if hasattr(canvas, 'parent'):
+                    parent = canvas.parent()
+                    if parent is not None:
+                        parent.move(
+                            parent.x() + (parent.width() - self.fig.get_figwidth() * self.fig.dpi) // 2,
+                            parent.y() + (parent.height() - self.fig.get_figheight() * self.fig.dpi) // 2
+                        )
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Internal helpers

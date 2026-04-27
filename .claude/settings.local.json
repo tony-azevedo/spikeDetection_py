@@ -7,7 +7,12 @@
       "Bash(python -m pip install pytest pytest-cov)",
       "Bash(python -m pytest tests/)",
       "Bash(python -m pytest tests/test_gui.py -v)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(python)",
+      "Bash(pip show *)",
+      "Bash(conda activate *)",
+      "Bash(/c/Users/tony/miniconda3/envs/flop_py312/python -c ' *)",
+      "Bash(/c/Users/tony/miniconda3/envs/flop_py312/python)"
     ]
   }
 }
