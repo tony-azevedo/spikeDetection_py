@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, RadioButtons, Button, TextBox
 
 from spikedetect.gui._widgets import (
-    raster_ticks, blocking_wait, install_finish_handlers,
+    raster_ticks, blocking_wait, install_finish_handlers, UserCancelled,
 )
 from spikedetect.models import SpikeDetectionParams
 from spikedetect.pipeline.filtering import filter_data
@@ -45,6 +45,7 @@ class FilterGUI:
         self._filtered = None
         self._locs = None
         self._finished = False
+        self._cancelled = False
         self._disconnect_handlers: Callable[[], None] | None = None
         # User-supplied callbacks for non-blocking (e.g. Qt) embedding.
         self.on_finished: Callable[[SpikeDetectionParams], None] | None = None
@@ -83,16 +84,21 @@ class FilterGUI:
         Returns:
             Updated parameters reflecting the user's slider
             choices.
+
+        Raises:
+            UserCancelled: If the user presses Esc.
         """
         self.setup()
 
         # Block until keypress
         while True:
             key = blocking_wait(self.fig)
-            if key is None or key in ("enter", "return"):
+            if key is None or key in ("enter", "return", "escape"):
                 break
 
         self.close()
+        if self._cancelled:
+            raise UserCancelled("FilterGUI cancelled by user (Esc)")
         return self.params
 
     def finish(self) -> None:
@@ -112,6 +118,9 @@ class FilterGUI:
 
     def _on_key(self, key: str | None) -> None:
         if key in ("enter", "return"):
+            self._finish()
+        elif key == "escape":
+            self._cancelled = True
             self._finish()
 
     def _finish(self) -> None:

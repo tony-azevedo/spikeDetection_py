@@ -8,6 +8,7 @@ threshold lines. Waveform panels show good/weird/bad categories.
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime
 from typing import Callable
 
 import numpy as np
@@ -15,12 +16,16 @@ import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
 from spikedetect.gui._widgets import (
-    raster_ticks, blocking_wait, install_finish_handlers,
+    raster_ticks, blocking_wait, install_finish_handlers, UserCancelled,
 )
 from spikedetect.models import SpikeDetectionParams
 from spikedetect.pipeline.classify import classify_spikes
 from spikedetect.pipeline.template import TemplateMatchResult
 from spikedetect.utils import smooth, smooth_and_differentiate
+
+_TITLE_FS = 9
+_LABEL_FS = 8
+_TICK_FS = 7
 
 
 class ThresholdGUI:
@@ -44,6 +49,7 @@ class ThresholdGUI:
         self.fig = None
         self._active_threshold = "distance"  # or "amplitude"
         self._finished = False
+        self._cancelled = False
         self._disconnect_handlers: Callable[[], None] | None = None
         # Callbacks for non-blocking (e.g. Qt) embedding.
         self.on_finished: Callable[[SpikeDetectionParams], None] | None = None
@@ -76,17 +82,22 @@ class ThresholdGUI:
 
         Returns:
             Updated parameters with new threshold values.
+
+        Raises:
+            UserCancelled: If the user presses Esc.
         """
         self.setup()
 
         while True:
             key = blocking_wait(self.fig)
-            if key is None or key in ("enter", "return"):
+            if key is None or key in ("enter", "return", "escape"):
                 break
             # 'b' toggle is dispatched in _on_key so it works in both
             # blocking and non-blocking modes.
 
         self.close()
+        if self._cancelled:
+            raise UserCancelled("ThresholdGUI cancelled by user (Esc)")
         return self.params
 
     def finish(self) -> None:
@@ -103,6 +114,9 @@ class ThresholdGUI:
 
     def _on_key(self, key: str | None) -> None:
         if key in ("enter", "return"):
+            self._finish()
+        elif key == "escape":
+            self._cancelled = True
             self._finish()
         elif key == "b":
             self._toggle_active()
@@ -150,37 +164,49 @@ class ThresholdGUI:
 
     def _build_figure(self) -> None:
         """Create the multi-panel figure layout."""
-        self.fig = plt.figure(figsize=(14, 9))
+        self.fig = plt.figure(figsize=(12, 6))
         self.fig.set_facecolor("white")
-        gs = GridSpec(3, 3, figure=self.fig, hspace=0.35, wspace=0.3)
+        gs = GridSpec(2, 3, figure=self.fig, hspace=0.4, wspace=0.3)
 
-        # Top-left: scatter plot of distance vs amplitude
-        self._ax_scatter = self.fig.add_subplot(gs[0:2, 0])
-        self._ax_scatter.set_xlabel("DTW Distance")
-        self._ax_scatter.set_ylabel("Amplitude")
+        # Left: scatter plot of distance vs amplitude (full height)
+        self._ax_scatter = self.fig.add_subplot(gs[:, 0])
+        self._ax_scatter.set_xlabel("DTW Distance", fontsize=_LABEL_FS)
+        self._ax_scatter.set_ylabel("Amplitude", fontsize=_LABEL_FS)
         self._ax_scatter.set_title(
-            "Click to move distance threshold (press 'b' to toggle)"
+            "Click to move distance threshold (press 'b' to toggle)",
+            fontsize=_TITLE_FS,
         )
 
-        # Top-center: good/weird filtered waveforms
+        # Top-center: good/weird filtered waveforms (click to save template)
         self._ax_good_filt = self.fig.add_subplot(gs[0, 1])
-        self._ax_good_filt.set_title("Good + Weird (filtered)")
+        self._ax_good_filt.set_title(
+            "Good + Weird filtered (click to save mean as template)",
+            fontsize=_TITLE_FS,
+        )
 
         # Top-right: bad/weirdbad filtered waveforms
         self._ax_bad_filt = self.fig.add_subplot(gs[0, 2])
-        self._ax_bad_filt.set_title("Bad + Weirdbad (filtered)")
+        self._ax_bad_filt.set_title(
+            "Bad + Weirdbad (filtered)", fontsize=_TITLE_FS,
+        )
 
-        # Middle-center: good/weird unfiltered waveforms (click to set template)
+        # Bottom-center: good/weird unfiltered waveforms
         self._ax_good_uf = self.fig.add_subplot(gs[1, 1])
-        self._ax_good_uf.set_title("Good + Weird (unfiltered)")
+        self._ax_good_uf.set_title(
+            "Good + Weird (unfiltered)", fontsize=_TITLE_FS,
+        )
 
-        # Middle-right: bad/weirdbad unfiltered
+        # Bottom-right: bad/weirdbad unfiltered
         self._ax_bad_uf = self.fig.add_subplot(gs[1, 2])
-        self._ax_bad_uf.set_title("Bad + Weirdbad (unfiltered)")
+        self._ax_bad_uf.set_title(
+            "Bad + Weirdbad (unfiltered)", fontsize=_TITLE_FS,
+        )
 
-        # Bottom: mean spike waveform with 2nd derivative
-        self._ax_mean = self.fig.add_subplot(gs[2, :])
-        self._ax_mean.set_title("Click to use mean waveform as new template")
+        for ax in (
+            self._ax_scatter, self._ax_good_filt, self._ax_bad_filt,
+            self._ax_good_uf, self._ax_bad_uf,
+        ):
+            ax.tick_params(labelsize=_TICK_FS)
 
         # Connect click handlers
         self.fig.canvas.mpl_connect("button_press_event", self._on_click)
@@ -190,17 +216,19 @@ class ThresholdGUI:
         if self._active_threshold == "distance":
             self._active_threshold = "amplitude"
             self._ax_scatter.set_title(
-                "Click to move amplitude threshold (press 'b' to toggle)"
+                "Click to move amplitude threshold (press 'b' to toggle)",
+                fontsize=_TITLE_FS,
             )
         else:
             self._active_threshold = "distance"
             self._ax_scatter.set_title(
-                "Click to move distance threshold (press 'b' to toggle)"
+                "Click to move distance threshold (press 'b' to toggle)",
+                fontsize=_TITLE_FS,
             )
         self._update_panels()
 
     def _on_click(self, event) -> None:
-        """Handle mouse click on scatter plot or mean waveform panel."""
+        """Handle mouse click on scatter plot or filtered-waveforms panel."""
         if event.inaxes == self._ax_scatter and event.xdata is not None:
             if self._active_threshold == "distance":
                 self.params.distance_threshold = float(event.xdata)
@@ -212,22 +240,34 @@ class ThresholdGUI:
                     self.params.distance_threshold,
                     self.params.amplitude_threshold,
                 )
-        elif event.inaxes == self._ax_mean:
+        elif event.inaxes == self._ax_good_filt:
             self._update_template_from_mean()
 
     def _update_template_from_mean(self) -> None:
-        """Set the spike template to the mean of accepted waveforms."""
+        """Save the blue mean trace over the filtered events as the template.
+
+        Uses the mean of the ``good`` (high-confidence) candidates' min-max
+        normalized filtered waveforms — the same trace drawn in blue on the
+        Good + Weird filtered panel.
+        """
         m = self._match
-        suspect = (m.dtw_distances < self.params.distance_threshold) & (
-            m.amplitudes > self.params.amplitude_threshold
+        good, _, _, _ = classify_spikes(
+            m.dtw_distances, m.amplitudes,
+            self.params.distance_threshold,
+            self.params.amplitude_threshold,
         )
-        if np.sum(suspect) == 0:
+        if np.sum(good) == 0 or m.norm_filtered_candidates.shape[1] == 0:
             return
 
-        good_nf = m.norm_filtered_candidates[:, suspect]
-        mean_template = np.mean(good_nf, axis=1)
+        mean_template = np.mean(
+            m.norm_filtered_candidates[:, good], axis=1,
+        )
         self.params.spike_template = mean_template
-        self._ax_mean.set_title("Template updated from mean waveform")
+        self.params.template_updated_at = datetime.now()
+        self._ax_good_filt.set_title(
+            f"Template saved ({int(np.sum(good))} good spikes)",
+            fontsize=_TITLE_FS,
+        )
         self.fig.canvas.draw_idle()
 
     def _update_panels(self) -> None:
@@ -272,27 +312,33 @@ class ThresholdGUI:
         self._ax_scatter.axhline(at, color=amp_color, linewidth=1.5)
         self._ax_scatter.set_xlim(0, xlim_hi)
         self._ax_scatter.set_ylim(ylim_lo, ylim_hi)
-        self._ax_scatter.set_xlabel("DTW Distance")
-        self._ax_scatter.set_ylabel("Amplitude")
+        self._ax_scatter.set_xlabel("DTW Distance", fontsize=_LABEL_FS)
+        self._ax_scatter.set_ylabel("Amplitude", fontsize=_LABEL_FS)
+        self._ax_scatter.tick_params(labelsize=_TICK_FS)
 
         if self._active_threshold == "distance":
             self._ax_scatter.set_title(
-                "Click to move distance threshold (press 'b' to toggle)"
+                "Click to move distance threshold (press 'b' to toggle)",
+                fontsize=_TITLE_FS,
             )
         else:
             self._ax_scatter.set_title(
-                "Click to move amplitude threshold (press 'b' to toggle)"
+                "Click to move amplitude threshold (press 'b' to toggle)",
+                fontsize=_TITLE_FS,
             )
 
         # --- Waveform panels ---
         window = m.window
         spike_window = m.spike_window
 
-        # Good/weird filtered
+        # Good/weird filtered (click here to save mean as template)
         self._ax_good_filt.cla()
         self._ax_good_filt.set_title(
-            f"Good + Weird filtered ({np.sum(suspect)} spikes)"
+            f"Good + Weird filtered — click to save template "
+            f"({int(np.sum(suspect))} spikes)",
+            fontsize=_TITLE_FS,
         )
+        self._ax_good_filt.tick_params(labelsize=_TICK_FS)
         if np.any(good) and m.norm_filtered_candidates.shape[1] > 0:
             self._ax_good_filt.plot(
                 window, m.norm_filtered_candidates[:, good],
@@ -311,7 +357,10 @@ class ThresholdGUI:
 
         # Bad/weirdbad filtered
         self._ax_bad_filt.cla()
-        self._ax_bad_filt.set_title("Bad + Weirdbad (filtered)")
+        self._ax_bad_filt.set_title(
+            "Bad + Weirdbad (filtered)", fontsize=_TITLE_FS,
+        )
+        self._ax_bad_filt.tick_params(labelsize=_TICK_FS)
         if np.any(bad) and m.norm_filtered_candidates.shape[1] > 0:
             self._ax_bad_filt.plot(
                 window, m.norm_filtered_candidates[:, bad],
@@ -325,7 +374,10 @@ class ThresholdGUI:
 
         # Good/weird unfiltered
         self._ax_good_uf.cla()
-        self._ax_good_uf.set_title("Good + Weird (unfiltered)")
+        self._ax_good_uf.set_title(
+            "Good + Weird (unfiltered)", fontsize=_TITLE_FS,
+        )
+        self._ax_good_uf.tick_params(labelsize=_TICK_FS)
         if np.any(good) and m.unfiltered_candidates.shape[1] > 0:
             self._ax_good_uf.plot(
                 spike_window, m.unfiltered_candidates[:, good],
@@ -336,23 +388,38 @@ class ThresholdGUI:
                 spike_window, m.unfiltered_candidates[:, weird],
                 color=(0, 0, 0), linewidth=0.5,
             )
-        # Mean spike line (blue)
+        # Mean spike line (blue) plus 2nd-derivative overlay
         if np.any(suspect) and m.unfiltered_candidates.shape[1] > 0:
             mean_uf = np.mean(m.unfiltered_candidates[:, suspect], axis=1)
             self._ax_good_uf.plot(
                 spike_window, mean_uf,
                 color=(0, 0.3, 1.0), linewidth=2, label="mean",
             )
-            # 2nd derivative overlay
+            # Compute the 2nd derivative on the baseline-subtracted mean
+            # so the green overlay sits on the same scale as the spike.
             smth_w = max(round(self.params.fs / 2000), 1)
-            sw = smooth(mean_uf - mean_uf[0], smth_w)
+            mean_centered = mean_uf - mean_uf[0]
+            sw = smooth(mean_centered, smth_w)
             sw_2d = smooth_and_differentiate(sw, smth_w)
             smth_start = round(self.params.fs / 2000)
             smth_end = len(sw_2d) - smth_start
             if smth_end > smth_start + 2:
                 region = sw_2d[smth_start + 1 : smth_end - 1]
-                if np.max(region) > 0:
-                    scaled = region / np.max(region) * np.max(mean_uf)
+                region_max_abs = np.max(np.abs(region))
+                amp_scale = np.max(np.abs(mean_centered))
+                if region_max_abs > 0 and amp_scale > 0:
+                    # Flip 2nd-deriv polarity to follow the spike's dominant
+                    # excursion so the inflection lobe points the same way
+                    # as the spike. Bound by abs-max to keep the overlay
+                    # within the spike's amplitude range.
+                    polarity = (
+                        1 if mean_centered.max() >= -mean_centered.min()
+                        else -1
+                    )
+                    scaled = (
+                        polarity * region / region_max_abs * amp_scale
+                        + mean_uf[0]
+                    )
                     x_region = spike_window[smth_start + 1 : smth_end - 1]
                     self._ax_good_uf.plot(
                         x_region, scaled,
@@ -361,7 +428,10 @@ class ThresholdGUI:
 
         # Bad/weirdbad unfiltered
         self._ax_bad_uf.cla()
-        self._ax_bad_uf.set_title("Bad + Weirdbad (unfiltered)")
+        self._ax_bad_uf.set_title(
+            "Bad + Weirdbad (unfiltered)", fontsize=_TITLE_FS,
+        )
+        self._ax_bad_uf.tick_params(labelsize=_TICK_FS)
         if np.any(bad) and m.unfiltered_candidates.shape[1] > 0:
             self._ax_bad_uf.plot(
                 spike_window, m.unfiltered_candidates[:, bad],
@@ -371,18 +441,6 @@ class ThresholdGUI:
             self._ax_bad_uf.plot(
                 spike_window, m.unfiltered_candidates[:, weirdbad],
                 color=(0.7, 0, 0), linewidth=0.5,
-            )
-
-        # --- Mean spike panel (bottom) ---
-        self._ax_mean.cla()
-        self._ax_mean.set_title(
-            "Mean accepted spike (click to use as template)"
-        )
-        if np.any(suspect) and m.unfiltered_candidates.shape[1] > 0:
-            mean_uf = np.mean(m.unfiltered_candidates[:, suspect], axis=1)
-            self._ax_mean.plot(
-                spike_window, mean_uf,
-                color=(0, 0.3, 1.0), linewidth=2,
             )
 
         self.fig.canvas.draw_idle()

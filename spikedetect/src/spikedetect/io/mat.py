@@ -8,6 +8,7 @@ the :class:`~spikedetect.models.Recording` and
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -19,6 +20,18 @@ from spikedetect.models import (
 )
 
 
+def _parse_iso_datetime(s: str) -> datetime | None:
+    """Parse an ISO-8601 timestamp written by :meth:`SpikeDetectionParams.to_dict`,
+    returning None on empty / unparseable input rather than raising.
+    """
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError:
+        return None
+
+
 def _read_h5_string(dataset: "h5py.Dataset") -> str:
     """Read a MATLAB string stored as uint16 codes in HDF5."""
     return "".join(chr(c) for c in np.asarray(dataset).ravel())
@@ -27,6 +40,24 @@ def _read_h5_string(dataset: "h5py.Dataset") -> str:
 def _read_h5_scalar(dataset: "h5py.Dataset") -> float:
     """Read a scalar value from an HDF5 dataset."""
     return float(np.asarray(dataset).ravel()[0])
+
+
+def _read_h5_array_or_empty(
+    dataset: "h5py.Dataset", dtype=np.int64
+) -> np.ndarray:
+    """Read a 1-D array, honoring MATLAB's empty-array marker.
+
+    ``hdf5storage`` (and MATLAB v7.3 ``save``) encode an empty array by
+    storing its shape vector as the dataset payload and setting an
+    ``MATLAB_empty=1`` attribute on the dataset. A naive
+    ``np.asarray(ds).ravel()`` therefore returns the shape vector (e.g.
+    ``[0, 1]``) as if it were real data — yielding phantom values at the
+    start of the trace. We detect the marker and return a true empty
+    array of the requested dtype.
+    """
+    if int(dataset.attrs.get("MATLAB_empty", 0)):
+        return np.array([], dtype=dtype)
+    return np.asarray(dataset).ravel().astype(dtype)
 
 
 def _load_params_h5(
@@ -64,6 +95,16 @@ def _load_params_h5(
     if "likelyiflpntpeak" in params_group:
         likelyiflpntpeak = int(scalar("likelyiflpntpeak"))
 
+    template_updated_at = None
+    if "templateUpdatedAt" in params_group:
+        template_updated_at = _parse_iso_datetime(
+            _read_h5_string(params_group["templateUpdatedAt"])
+        )
+
+    min_isi_samples = None
+    if "min_isi_samples" in params_group:
+        min_isi_samples = int(scalar("min_isi_samples"))
+
     return SpikeDetectionParams(
         fs=scalar("fs", 10000.0),
         spike_template_width=int(
@@ -83,6 +124,8 @@ def _load_params_h5(
         polarity=int(scalar("polarity", 1)),
         likely_inflection_point_peak=likelyiflpntpeak,
         last_filename=last_filename,
+        min_isi_samples=min_isi_samples,
+        template_updated_at=template_updated_at,
     )
 
 
@@ -114,6 +157,16 @@ def _load_params_scipy(d: dict) -> SpikeDetectionParams:
     if "likelyiflpntpeak" in d:
         likelyiflpntpeak = int(scalar("likelyiflpntpeak"))
 
+    template_updated_at = None
+    if "templateUpdatedAt" in d:
+        template_updated_at = _parse_iso_datetime(
+            str(d["templateUpdatedAt"])
+        )
+
+    min_isi_samples = None
+    if "min_isi_samples" in d:
+        min_isi_samples = int(scalar("min_isi_samples"))
+
     return SpikeDetectionParams(
         fs=scalar("fs", 10000.0),
         spike_template_width=int(
@@ -133,6 +186,8 @@ def _load_params_scipy(d: dict) -> SpikeDetectionParams:
         polarity=int(scalar("polarity", 1)),
         likely_inflection_point_peak=likelyiflpntpeak,
         last_filename=last_filename,
+        min_isi_samples=min_isi_samples,
+        template_updated_at=template_updated_at,
     )
 
 
@@ -186,10 +241,8 @@ def _load_h5(path: Path) -> Recording:
 
             spike_times = np.array([], dtype=np.int64)
             if "spikes" in f:
-                spike_times = (
-                    np.asarray(f["spikes"])
-                    .ravel()
-                    .astype(np.int64)
+                spike_times = _read_h5_array_or_empty(
+                    f["spikes"], dtype=np.int64
                 )
 
             spike_times_uncorrected = np.array(
@@ -197,9 +250,10 @@ def _load_h5(path: Path) -> Recording:
             )
             if "spikes_uncorrected" in f:
                 spike_times_uncorrected = (
-                    np.asarray(f["spikes_uncorrected"])
-                    .ravel()
-                    .astype(np.int64)
+                    _read_h5_array_or_empty(
+                        f["spikes_uncorrected"],
+                        dtype=np.int64,
+                    )
                 )
 
             spot_checked = False
@@ -530,4 +584,23 @@ def save_result(
                 sdp.create_dataset(
                     "lastfilename",
                     data=lf_codes.reshape(-1, 1),
+                )
+
+            if p.template_updated_at is not None:
+                ts_codes = np.array(
+                    [ord(c) for c in p.template_updated_at.isoformat()],
+                    dtype=np.uint16,
+                )
+                sdp.create_dataset(
+                    "templateUpdatedAt",
+                    data=ts_codes.reshape(-1, 1),
+                )
+
+            if p.min_isi_samples is not None:
+                sdp.create_dataset(
+                    "min_isi_samples",
+                    data=np.array(
+                        [[float(p.min_isi_samples)]],
+                        dtype=np.float64,
+                    ),
                 )

@@ -154,6 +154,7 @@ class InteractiveWorkflow:
                 continue
 
             params.spike_template = template
+            params.template_updated_at = template_gui.template_updated_at
 
             # Step 4: Run detection with current params
             logger.info("Running spike detection pipeline")

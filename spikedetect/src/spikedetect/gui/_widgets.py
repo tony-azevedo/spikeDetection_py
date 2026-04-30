@@ -9,6 +9,17 @@ import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 
 
+class UserCancelled(Exception):
+    """Raised by a GUI's ``run()`` when the user cancels with Esc.
+
+    Pipelines can wrap ``gui.run()`` in ``try: ... except UserCancelled:``
+    to bail out cleanly. Closing the window is *not* a cancel — only Esc
+    raises this. In the Qt GUIs the Cancel button and the X close also
+    don't raise; they fall through with the (deep-copied) initial params,
+    matching the matplotlib close-as-accept behavior.
+    """
+
+
 def raster_ticks(
     ax: plt.Axes,
     locations: np.ndarray,

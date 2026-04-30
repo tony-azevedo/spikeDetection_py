@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
 from spikedetect.gui._widgets import (
-    raster_ticks, blocking_wait, install_finish_handlers,
+    raster_ticks, blocking_wait, install_finish_handlers, UserCancelled,
 )
 from spikedetect.models import (
     Recording, SpikeDetectionParams, SpikeDetectionResult,
@@ -70,6 +70,7 @@ class SpotCheckGUI:
         self._raster_lines = None
 
         self._finished = False
+        self._cancelled = False
         self._disconnect_handlers: Callable[[], None] | None = None
         # Callbacks for non-blocking (e.g. Qt) embedding.
         self.on_finished: Callable[[SpikeDetectionResult], None] | None = None
@@ -107,6 +108,9 @@ class SpotCheckGUI:
 
         Returns:
             Updated result with spot_checked set to True.
+
+        Raises:
+            UserCancelled: If the user presses Esc.
         """
         self.setup()
 
@@ -120,6 +124,8 @@ class SpotCheckGUI:
             # for Enter; the wait returns when _finish stops the loop.
 
         self.close()
+        if self._cancelled:
+            raise UserCancelled("SpotCheckGUI cancelled by user (Esc)")
         return self.result
 
     def finish(self) -> None:
@@ -136,6 +142,10 @@ class SpotCheckGUI:
 
     def _on_key(self, key: str | None) -> None:
         if key in ("enter", "return"):
+            self._finish()
+            return
+        if key == "escape":
+            self._cancelled = True
             self._finish()
             return
         if self._spikes is None or len(self._spikes) == 0:

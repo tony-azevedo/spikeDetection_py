@@ -28,7 +28,7 @@ from matplotlib.gridspec import GridSpec
 from spikedetect.gui._qt_imports import (
     QApplication, QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QWidget, Qt,
 )
-from spikedetect.gui._widgets import raster_ticks
+from spikedetect.gui._widgets import raster_ticks, UserCancelled
 from spikedetect.gui.spotcheck_gui import SpotCheckGUI
 from spikedetect.models import (
     Recording, SpikeDetectionParams, SpikeDetectionResult,
@@ -207,6 +207,7 @@ class SpotCheckGUIQt(QDialog):
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self._on_finish()
         elif key == Qt.Key.Key_Escape:
+            self._cancelled = True
             self.reject()
         elif key == Qt.Key.Key_Y:
             self._dispatch("y")
@@ -264,11 +265,17 @@ class SpotCheckGUIQt(QDialog):
         return self
 
     def run(self) -> SpikeDetectionResult:
-        """Display modally and return the (possibly modified) result."""
+        """Display modally and return the (possibly modified) result.
+
+        Raises:
+            UserCancelled: If the user presses Esc.
+        """
         if self.result.n_spikes == 0:
             self._on_finish()
             return self.result
         self.exec()
+        if self._cancelled:
+            raise UserCancelled("SpotCheckGUIQt cancelled by user (Esc)")
         return self.result
 
     def finish(self) -> None:

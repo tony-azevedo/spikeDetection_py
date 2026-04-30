@@ -1,6 +1,7 @@
 """Interactive Matplotlib GUI components for spike detection
 parameter tuning."""
 
+from spikedetect.gui._widgets import UserCancelled
 from spikedetect.gui.filter_gui import FilterGUI
 from spikedetect.gui.template_gui import TemplateSelectionGUI
 from spikedetect.gui.threshold_gui import ThresholdGUI
@@ -17,6 +18,7 @@ __all__ = [
     "ThresholdGUIQt",
     "SpotCheckGUI",
     "SpotCheckGUIQt",
+    "UserCancelled",
 ]
 
 

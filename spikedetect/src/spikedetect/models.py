@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Any
 
 import numpy as np
@@ -49,6 +50,17 @@ class SpikeDetectionParams:
     polarity: int = 1
     likely_inflection_point_peak: int | None = None
     last_filename: str = ""
+    # Minimum spacing between accepted spikes (in samples). When None,
+    # the detector derives it from the template's full-width-half-max.
+    # Set to 0 to disable refractory filtering. Catches the common
+    # double-detection failure mode where two near-simultaneous local
+    # peaks both pass threshold for a single underlying spike.
+    min_isi_samples: int | None = None
+    # When the spike_template was last built/saved (naive local time).
+    # GUIs use this to skip the click-to-rebuild step when the template
+    # is still fresh; bypassed for direct ``params.spike_template = ...``
+    # assignment, so set it manually if you write a template by hand.
+    template_updated_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if self.spike_template_width == 0:
@@ -129,6 +141,18 @@ class SpikeDetectionParams:
             self.spike_template_width = len(self.spike_template)
         return self
 
+    def template_is_fresh(self, ttl_hours: float = 24.0) -> bool:
+        """Whether ``spike_template`` exists and was saved within ``ttl_hours``.
+
+        Used by the GUIs to decide whether to skip the click-to-rebuild step.
+        Returns False if there's no template, no timestamp, or the
+        timestamp is older than the TTL.
+        """
+        if self.spike_template is None or self.template_updated_at is None:
+            return False
+        age = datetime.now() - self.template_updated_at
+        return age < timedelta(hours=ttl_hours)
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-compatible dict."""
         d = {
@@ -149,6 +173,10 @@ class SpikeDetectionParams:
             d["likely_inflection_point_peak"] = (
                 self.likely_inflection_point_peak
             )
+        if self.min_isi_samples is not None:
+            d["min_isi_samples"] = self.min_isi_samples
+        if self.template_updated_at is not None:
+            d["template_updated_at"] = self.template_updated_at.isoformat()
         return d
 
     @classmethod
@@ -157,6 +185,9 @@ class SpikeDetectionParams:
         template = d.get("spike_template")
         if template is not None:
             template = np.asarray(template, dtype=np.float64)
+        ts = d.get("template_updated_at")
+        if isinstance(ts, str):
+            ts = datetime.fromisoformat(ts)
         return cls(
             fs=d["fs"],
             spike_template_width=d.get("spike_template_width", 0),
@@ -170,6 +201,8 @@ class SpikeDetectionParams:
             polarity=d.get("polarity", 1),
             likely_inflection_point_peak=d.get("likely_inflection_point_peak"),
             last_filename=d.get("last_filename", ""),
+            min_isi_samples=d.get("min_isi_samples"),
+            template_updated_at=ts,
         )
 
 

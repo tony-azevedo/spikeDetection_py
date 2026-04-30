@@ -15,7 +15,7 @@ matplotlib.use("QtAgg")
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
-from spikedetect.gui._widgets import raster_ticks
+from spikedetect.gui._widgets import raster_ticks, UserCancelled
 from spikedetect.models import SpikeDetectionParams
 from spikedetect.pipeline.filtering import filter_data
 from spikedetect.pipeline.peaks import find_spike_locations
@@ -93,6 +93,7 @@ class FilterGUIQt(QDialog):
         self._filtered = None
         self._locs = None
         self._finished = False
+        self._cancelled = False
 
         # User-supplied callbacks for non-blocking embedding
         self.on_finished: Callable[[SpikeDetectionParams], None] | None = None
@@ -262,6 +263,8 @@ class FilterGUIQt(QDialog):
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self._on_accept()
         elif event.key() == Qt.Key.Key_Escape:
+            # Esc cancels — Cancel button reject() falls through without raising.
+            self._cancelled = True
             self.reject()
         else:
             super().keyPressEvent(event)
@@ -436,8 +439,13 @@ class FilterGUIQt(QDialog):
 
         Returns:
             Updated parameters reflecting the user's choices.
+
+        Raises:
+            UserCancelled: If the user presses Esc.
         """
         self.exec()
+        if self._cancelled:
+            raise UserCancelled("FilterGUIQt cancelled by user (Esc)")
         return self.params
 
     def finish(self) -> None:

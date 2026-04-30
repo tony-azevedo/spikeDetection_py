@@ -27,6 +27,42 @@ from spikedetect.pipeline.template import TemplateMatcher
 logger = logging.getLogger(__name__)
 
 
+def _template_fwhm_samples(template: np.ndarray) -> int:
+    """Number of samples where the template exceeds (min+max)/2.
+
+    A robust FWHM proxy for the min-max-normalized templates the GUI saves.
+    Falls back to 1 for degenerate (flat / empty) templates.
+    """
+    if template is None or len(template) == 0:
+        return 1
+    t = np.asarray(template, dtype=np.float64)
+    half = (float(t.min()) + float(t.max())) / 2.0
+    return max(int(np.sum(t > half)), 1)
+
+
+def _apply_refractory_filter(
+    corrected: np.ndarray,
+    uncorrected: np.ndarray,
+    min_dt_samples: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Greedy forward sweep: keep each spike whose time is at least
+    ``min_dt_samples`` after the previously kept spike. Both arrays are
+    sorted by ``corrected`` time and returned as a paired (corrected,
+    uncorrected) tuple."""
+    if len(corrected) <= 1 or min_dt_samples <= 0:
+        return corrected, uncorrected
+    order = np.argsort(corrected)
+    corr_s = corrected[order]
+    unc_s = uncorrected[order]
+    keep = np.zeros(len(corr_s), dtype=bool)
+    last_kept = -np.inf
+    for i, t in enumerate(corr_s):
+        if t - last_kept >= min_dt_samples:
+            keep[i] = True
+            last_kept = t
+    return corr_s[keep], unc_s[keep]
+
+
 class SpikeDetector:
     """Full non-interactive spike detection pipeline.
 
@@ -292,6 +328,27 @@ class SpikeDetector:
 
         # Update params with computed inflection point
         params.likely_inflection_point_peak = infl_peak
+
+        # Step 6: Refractory filter -- drop double detections where two
+        # local peaks both pass threshold for a single underlying spike.
+        # Use the template's FWHM as the natural minimum spacing unless
+        # the user explicitly set ``params.min_isi_samples``.
+        if params.min_isi_samples is None:
+            min_isi = _template_fwhm_samples(params.spike_template)
+        else:
+            min_isi = int(params.min_isi_samples)
+        n_before = len(corrected)
+        min_isi = 3*min_isi # Just double the FWHM. This is a bit arbitrary, but so is the FWHM anyways.
+        corrected, uncorrected = _apply_refractory_filter(
+            corrected, uncorrected, min_isi,
+        )       
+        n_dropped = n_before - len(corrected)
+        if n_dropped > 0:
+            logger.info(
+                "Refractory filter dropped %d double detections "
+                "(min_isi=%d samples = %.2f ms)",
+                n_dropped, min_isi, 1000 * min_isi / fs,
+            )
 
         # Offset back to original recording indices
         corrected_global = corrected + start_point

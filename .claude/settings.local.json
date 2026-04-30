@@ -12,7 +12,15 @@
       "Bash(pip show *)",
       "Bash(conda activate *)",
       "Bash(/c/Users/tony/miniconda3/envs/flop_py312/python -c ' *)",
-      "Bash(/c/Users/tony/miniconda3/envs/flop_py312/python)"
+      "Bash(/c/Users/tony/miniconda3/envs/flop_py312/python)",
+      "Bash(conda run *)",
+      "PowerShell(conda run -n flop_py312 python -c \"import matplotlib; matplotlib.use\\('Agg'\\); from spikedetect.gui.threshold_gui import ThresholdGUI; from spikedetect.gui.threshold_gui_qt import ThresholdGUIQt; print\\('imports OK'\\)\")",
+      "PowerShell(conda run -n flop_py312 --no-capture-output python -u _smoketest_threshold_gui.py)",
+      "PowerShell(conda run -n flop_py312 --no-capture-output python -u \"C:\\\\Users\\\\tony\\\\Code\\\\spikeDetection_py\\\\_smoketest_threshold_gui.py\")",
+      "PowerShell(conda run -n flop_py312 --no-capture-output python -m pytest \"c:/Users/tony/Code/spikeDetection_py/spikedetect/tests/\" -x -q 2>&1)",
+      "PowerShell(conda run -n flop_py312 --no-capture-output python -m pytest \"c:/Users/tony/Code/spikeDetection_py/spikedetect/tests/\" -q 2>&1)",
+      "PowerShell(conda run -n flop_py312 --no-capture-output python -c \"from spikedetect.gui import UserCancelled, FilterGUI, TemplateSelectionGUI, ThresholdGUI, SpotCheckGUI; print\\('mpl OK'\\); from spikedetect.gui import FilterGUIQt, TemplateSelectionGUIQt, ThresholdGUIQt, SpotCheckGUIQt; print\\('qt OK'\\); print\\('UserCancelled is Exception subclass:', issubclass\\(UserCancelled, Exception\\)\\)\")",
+      "PowerShell(conda run -n flop_py312 --no-capture-output python -m pytest \"c:/Users/tony/Code/spikeDetection_py/spikedetect/tests/test_pipeline.py\" -v 2>&1)"
     ]
   }
 }

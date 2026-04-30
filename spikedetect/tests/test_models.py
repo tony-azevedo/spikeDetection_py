@@ -130,6 +130,48 @@ class TestSpikeDetectionParams:
         assert params.fs == 10000
         assert params.hp_cutoff == 200.0
 
+    def test_template_is_fresh_no_template(self):
+        params = SpikeDetectionParams(fs=10000)
+        assert not params.template_is_fresh()
+
+    def test_template_is_fresh_no_timestamp(self):
+        params = SpikeDetectionParams(
+            fs=10000, spike_template=np.ones(5),
+        )
+        assert not params.template_is_fresh()
+
+    def test_template_is_fresh_within_ttl(self):
+        from datetime import datetime, timedelta
+        params = SpikeDetectionParams(
+            fs=10000,
+            spike_template=np.ones(5),
+            template_updated_at=datetime.now() - timedelta(hours=1),
+        )
+        assert params.template_is_fresh(ttl_hours=24)
+
+    def test_template_is_fresh_beyond_ttl(self):
+        from datetime import datetime, timedelta
+        params = SpikeDetectionParams(
+            fs=10000,
+            spike_template=np.ones(5),
+            template_updated_at=datetime.now() - timedelta(hours=48),
+        )
+        assert not params.template_is_fresh(ttl_hours=24)
+
+    def test_timestamp_roundtrip(self):
+        from datetime import datetime
+        # Microseconds preserved by isoformat round-trip.
+        ts = datetime(2026, 4, 28, 14, 30, 15, 123456)
+        original = SpikeDetectionParams(
+            fs=10000,
+            spike_template=np.ones(5),
+            template_updated_at=ts,
+        )
+        d = original.to_dict()
+        assert d["template_updated_at"] == ts.isoformat()
+        restored = SpikeDetectionParams.from_dict(d)
+        assert restored.template_updated_at == ts
+
 
 class TestRecording:
     def test_creation(self):

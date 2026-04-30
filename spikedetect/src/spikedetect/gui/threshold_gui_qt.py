@@ -21,7 +21,10 @@ from matplotlib.gridspec import GridSpec
 from spikedetect.gui._qt_imports import (
     QApplication, QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QWidget, Qt,
 )
-from spikedetect.gui.threshold_gui import ThresholdGUI
+from spikedetect.gui._widgets import UserCancelled
+from spikedetect.gui.threshold_gui import (
+    ThresholdGUI, _TITLE_FS, _LABEL_FS, _TICK_FS,
+)
 from spikedetect.models import SpikeDetectionParams
 from spikedetect.pipeline.template import TemplateMatchResult
 
@@ -49,6 +52,7 @@ class ThresholdGUIQt(QDialog):
         self._match = match_result
         self.params = deepcopy(params)
         self._active_threshold = "distance"
+        self._cancelled = False
 
         self.on_finished: Callable[[SpikeDetectionParams], None] | None = None
         self.on_thresholds_changed: Callable[[float, float], None] | None = None
@@ -60,20 +64,20 @@ class ThresholdGUIQt(QDialog):
 
     def _setup_ui(self) -> None:
         self.setWindowTitle("Tune thresholds")
-        self.setMinimumSize(1100, 700)
+        self.setMinimumSize(1000, 550)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
 
-        self._fig = Figure(figsize=(14, 9))
+        self._fig = Figure(figsize=(12, 6))
         self.canvas = FigureCanvasQTAgg(self._fig)
-        self.canvas.setMinimumHeight(550)
+        self.canvas.setMinimumHeight(450)
         layout.addWidget(self.canvas, stretch=1)
 
         bar = QHBoxLayout()
         self._btn_toggle = QPushButton("Toggle active threshold (b)")
         self._btn_toggle.clicked.connect(self._on_toggle)
-        self._btn_use_mean = QPushButton("Use mean as template")
+        self._btn_use_mean = QPushButton("Save mean as template")
         self._btn_use_mean.clicked.connect(self._on_use_mean_template)
         bar.addWidget(self._btn_toggle)
         bar.addWidget(self._btn_use_mean)
@@ -91,25 +95,39 @@ class ThresholdGUIQt(QDialog):
         # Mirror ThresholdGUI._build_figure but using a raw Figure (no pyplot)
         # so the canvas lives only in our QDialog, not in a pyplot manager.
         self._fig.set_facecolor("white")
-        gs = GridSpec(3, 3, figure=self._fig, hspace=0.35, wspace=0.3)
+        gs = GridSpec(2, 3, figure=self._fig, hspace=0.4, wspace=0.3)
 
-        self._ax_scatter = self._fig.add_subplot(gs[0:2, 0])
-        self._ax_scatter.set_xlabel("DTW Distance")
-        self._ax_scatter.set_ylabel("Amplitude")
+        self._ax_scatter = self._fig.add_subplot(gs[:, 0])
+        self._ax_scatter.set_xlabel("DTW Distance", fontsize=_LABEL_FS)
+        self._ax_scatter.set_ylabel("Amplitude", fontsize=_LABEL_FS)
         self._ax_scatter.set_title(
-            "Click to move distance threshold (use Toggle for amplitude)"
+            "Click to move distance threshold (use Toggle for amplitude)",
+            fontsize=_TITLE_FS,
         )
 
         self._ax_good_filt = self._fig.add_subplot(gs[0, 1])
-        self._ax_good_filt.set_title("Good + Weird (filtered)")
+        self._ax_good_filt.set_title(
+            "Good + Weird filtered (click to save mean as template)",
+            fontsize=_TITLE_FS,
+        )
         self._ax_bad_filt = self._fig.add_subplot(gs[0, 2])
-        self._ax_bad_filt.set_title("Bad + Weirdbad (filtered)")
+        self._ax_bad_filt.set_title(
+            "Bad + Weirdbad (filtered)", fontsize=_TITLE_FS,
+        )
         self._ax_good_uf = self._fig.add_subplot(gs[1, 1])
-        self._ax_good_uf.set_title("Good + Weird (unfiltered)")
+        self._ax_good_uf.set_title(
+            "Good + Weird (unfiltered)", fontsize=_TITLE_FS,
+        )
         self._ax_bad_uf = self._fig.add_subplot(gs[1, 2])
-        self._ax_bad_uf.set_title("Bad + Weirdbad (unfiltered)")
-        self._ax_mean = self._fig.add_subplot(gs[2, :])
-        self._ax_mean.set_title("Click to use mean waveform as new template")
+        self._ax_bad_uf.set_title(
+            "Bad + Weirdbad (unfiltered)", fontsize=_TITLE_FS,
+        )
+
+        for ax in (
+            self._ax_scatter, self._ax_good_filt, self._ax_bad_filt,
+            self._ax_good_uf, self._ax_bad_uf,
+        ):
+            ax.tick_params(labelsize=_TICK_FS)
 
         # Used by ThresholdGUI._update_panels for canvas.draw_idle()
         self.fig = self._fig
@@ -120,6 +138,7 @@ class ThresholdGUIQt(QDialog):
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self._on_accept()
         elif event.key() == Qt.Key.Key_Escape:
+            self._cancelled = True
             self.reject()
         elif event.key() == Qt.Key.Key_B:
             self._on_toggle()
@@ -150,8 +169,13 @@ class ThresholdGUIQt(QDialog):
     def _on_toggle(self) -> None:
         ThresholdGUI._toggle_active(self)
 
-    def _on_use_mean_template(self) -> None:
+    def _update_template_from_mean(self) -> None:
+        # Reachable from ThresholdGUI._on_click via class delegation, so the
+        # method must exist on this instance (not just the button handler).
         ThresholdGUI._update_template_from_mean(self)
+
+    def _on_use_mean_template(self) -> None:
+        self._update_template_from_mean()
 
     def _on_accept(self) -> None:
         if self.on_finished is not None:
@@ -163,8 +187,14 @@ class ThresholdGUIQt(QDialog):
         return self
 
     def run(self) -> SpikeDetectionParams:
-        """Display modally and return the (possibly updated) params."""
+        """Display modally and return the (possibly updated) params.
+
+        Raises:
+            UserCancelled: If the user presses Esc.
+        """
         self.exec()
+        if self._cancelled:
+            raise UserCancelled("ThresholdGUIQt cancelled by user (Esc)")
         return self.params
 
     def finish(self) -> None:

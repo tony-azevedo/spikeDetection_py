@@ -9,14 +9,28 @@ cross-correlation aligned and averaged to produce the spike template.
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime
 from typing import Callable
 
 import numpy as np
 import matplotlib.pyplot as plt
 
-from spikedetect.gui._widgets import blocking_wait, install_finish_handlers
+from spikedetect.gui._widgets import (
+    blocking_wait, install_finish_handlers, UserCancelled,
+)
 from spikedetect.models import SpikeDetectionParams
 from spikedetect.pipeline.peaks import find_spike_locations
+
+
+def _format_template_age(updated_at: datetime) -> str:
+    """Render a template timestamp as 'X min/h/d ago' for the GUI title."""
+    delta = datetime.now() - updated_at
+    secs = max(delta.total_seconds(), 0)
+    if secs < 3600:
+        return f"{int(secs / 60)} min ago"
+    if secs < 86400:
+        return f"{secs / 3600:.1f} h ago"
+    return f"{secs / 86400:.1f} d ago"
 
 
 class TemplateSelectionGUI:
@@ -33,14 +47,33 @@ class TemplateSelectionGUI:
     """
 
     def __init__(
-        self, filtered_data: np.ndarray, params: SpikeDetectionParams
+        self,
+        filtered_data: np.ndarray,
+        params: SpikeDetectionParams,
+        template_ttl_hours: float = 24.0,
     ) -> None:
         self._filtered = np.asarray(filtered_data, dtype=np.float64).ravel()
         self.params = deepcopy(params)
         self.fig = None
         self._selected_indices: list[int] = []
         self._finished = False
+        self._cancelled = False
         self._template: np.ndarray | None = None
+        self._template_ttl_hours = template_ttl_hours
+        # Whether to plot and accept-on-Enter the existing template. Any
+        # template (fresh, stale, or untimestamped) gets reused; freshness
+        # only drives the display color. Re-using the template stamps a
+        # new timestamp, so Enter restarts the clock either way.
+        self._reuse_existing_template = (
+            self.params.spike_template is not None
+        )
+        self._existing_template_is_fresh = self.params.template_is_fresh(
+            template_ttl_hours,
+        )
+        # Set after run() to the timestamp the caller should write back to
+        # ``params.template_updated_at``. Stamped on click-rebuild and on
+        # Enter-keep alike.
+        self.template_updated_at: datetime | None = None
         self._disconnect_handlers: Callable[[], None] | None = None
         # Callbacks for non-blocking (e.g. Qt) embedding.
         self.on_finished: Callable[[np.ndarray | None], None] | None = None
@@ -68,13 +101,22 @@ class TemplateSelectionGUI:
         Returns:
             The averaged spike template waveform, or None if no
             spikes were selected.
+
+        Raises:
+            UserCancelled: If the user presses Esc.
         """
         self.setup()
 
         while True:
             key = blocking_wait(self.fig)
-            if key is None or key in ("enter", "return"):
+            if key is None or key in ("enter", "return", "escape"):
                 break
+
+        if self._cancelled:
+            self.close()
+            raise UserCancelled(
+                "TemplateSelectionGUI cancelled by user (Esc)"
+            )
 
         # Build template synchronously for blocking callers; close()
         # will skip the rebuild because we set self._template here.
@@ -96,6 +138,9 @@ class TemplateSelectionGUI:
 
     def _on_key(self, key: str | None) -> None:
         if key in ("enter", "return"):
+            self._finish()
+        elif key == "escape":
+            self._cancelled = True
             self._finish()
 
     def _finish(self) -> None:
@@ -139,12 +184,42 @@ class TemplateSelectionGUI:
                 locs, self._filtered[locs], "ro", markersize=4, picker=5,
             )
         self._ax_main.set_xlim(0, n)
-        self._ax_main.set_title(
-            "Click peaks to select seed spikes (shift+click for multiple), "
-            "then press Enter"
-        )
 
-        self._ax_squig.set_title("Selected waveforms")
+        if self._reuse_existing_template:
+            if self._existing_template_is_fresh:
+                age_note = _format_template_age(
+                    self.params.template_updated_at,
+                )
+                color = (0, 0.3, 1.0)  # fresh: blue
+            elif self.params.template_updated_at is not None:
+                age_note = (
+                    f"stale, "
+                    f"{_format_template_age(self.params.template_updated_at)}"
+                )
+                color = (1.0, 0.55, 0.0)  # stale: orange
+            else:
+                age_note = "no timestamp"
+                color = (1.0, 0.55, 0.0)  # untimestamped: orange
+            self._ax_main.set_title(
+                f"Existing template ({age_note}). Press Enter to keep "
+                "(clock resets), or click peaks to rebuild."
+            )
+            half = self.params.spike_template_width // 2
+            window = np.arange(-half, half + 1)
+            tmpl = self.params.spike_template
+            window = window[: len(tmpl)]
+            self._ax_squig.plot(
+                window, tmpl, color=color, linewidth=2,
+            )
+            self._ax_squig.set_title(
+                f"Existing template ({age_note}, will be kept on Enter)"
+            )
+        else:
+            self._ax_main.set_title(
+                "Click peaks to select seed spikes "
+                "(shift+click for multiple), then press Enter"
+            )
+            self._ax_squig.set_title("Selected waveforms")
 
         # Connect click handler
         self.fig.canvas.mpl_connect("pick_event", self._on_pick)
@@ -196,6 +271,13 @@ class TemplateSelectionGUI:
 
         if loc in self._selected_indices:
             return
+
+        # First click while an existing template (fresh or stale) was on
+        # display: clear it so the user sees only the new selection.
+        if (self._reuse_existing_template
+                and len(self._selected_indices) == 0):
+            self._ax_squig.cla()
+
         self._selected_indices.append(loc)
 
         # Mark selected peak in green
@@ -219,10 +301,19 @@ class TemplateSelectionGUI:
     def _build_template(self) -> np.ndarray | None:
         """Build averaged template from selected spike waveforms.
 
-        Uses cross-correlation alignment when multiple spikes are
-        selected, matching the MATLAB ``getSeedTemplate`` logic.
+        If no peaks were clicked but ``params`` has an existing template
+        (fresh, stale, or untimestamped), keep that one and stamp
+        ``datetime.now()`` -- pressing Enter is treated as a vote of
+        confidence and restarts the freshness clock. Otherwise build a
+        new template via cross-correlation alignment, matching the MATLAB
+        ``getSeedTemplate`` logic, and stamp ``datetime.now()``.
         """
         if len(self._selected_indices) == 0:
+            if self._reuse_existing_template:
+                # Restart the clock: Enter on an existing template is
+                # an explicit re-affirmation by the user.
+                self.template_updated_at = datetime.now()
+                return self.params.spike_template
             return None
 
         stw = self.params.spike_template_width
@@ -276,4 +367,5 @@ class TemplateSelectionGUI:
         ]
         template = avg[template_window]
 
+        self.template_updated_at = datetime.now()
         return template

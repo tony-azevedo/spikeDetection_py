@@ -262,6 +262,105 @@ class TestTemplateSelectionGUI:
             gui._on_pick(MockEvent())
             assert len(gui._selected_indices) == 1
 
+    def test_fresh_template_kept_with_clock_reset(
+        self, filtered, params_with_template,
+    ):
+        from datetime import datetime, timedelta
+        filt, _ = filtered
+        old_ts = datetime.now() - timedelta(hours=1)
+        params_with_template.template_updated_at = old_ts
+        gui = TemplateSelectionGUI(filt, params_with_template)
+        assert gui._reuse_existing_template
+        assert gui._existing_template_is_fresh
+        gui._build_figure()
+        # No clicks on a fresh template -> keep template, restart clock.
+        before = datetime.now()
+        template = gui._build_template()
+        after = datetime.now()
+        np.testing.assert_array_equal(
+            template, params_with_template.spike_template,
+        )
+        assert gui.template_updated_at is not None
+        assert before <= gui.template_updated_at <= after
+        assert gui.template_updated_at != old_ts
+
+    def test_stale_template_kept_with_clock_reset(
+        self, filtered, params_with_template,
+    ):
+        from datetime import datetime, timedelta
+        filt, _ = filtered
+        params_with_template.template_updated_at = (
+            datetime.now() - timedelta(hours=48)
+        )
+        gui = TemplateSelectionGUI(
+            filt, params_with_template, template_ttl_hours=24,
+        )
+        assert gui._reuse_existing_template
+        assert not gui._existing_template_is_fresh
+        gui._build_figure()
+        # No clicks on a stale template -> still keep it; clock restarts.
+        before = datetime.now()
+        template = gui._build_template()
+        after = datetime.now()
+        np.testing.assert_array_equal(
+            template, params_with_template.spike_template,
+        )
+        assert before <= gui.template_updated_at <= after
+
+    def test_template_without_timestamp_treated_as_stale(
+        self, filtered, params_with_template,
+    ):
+        from datetime import datetime
+        filt, _ = filtered
+        params_with_template.template_updated_at = None
+        gui = TemplateSelectionGUI(filt, params_with_template)
+        assert gui._reuse_existing_template
+        assert not gui._existing_template_is_fresh
+        gui._build_figure()
+        before = datetime.now()
+        template = gui._build_template()
+        after = datetime.now()
+        np.testing.assert_array_equal(
+            template, params_with_template.spike_template,
+        )
+        # Untimestamped templates also get the clock-reset on Enter-keep.
+        assert before <= gui.template_updated_at <= after
+
+    def test_no_template_returns_none_without_clicks(
+        self, filtered, params,
+    ):
+        filt, _ = filtered
+        # params here has no template
+        gui = TemplateSelectionGUI(filt, params)
+        assert not gui._reuse_existing_template
+        gui._build_figure()
+        assert gui._build_template() is None
+        assert gui.template_updated_at is None
+
+    def test_clicks_override_existing_template_and_stamp(
+        self, filtered, params_with_template, synthetic_data,
+    ):
+        from datetime import datetime, timedelta
+        filt, _ = filtered
+        _, fs, positions = synthetic_data
+        start_point = round(0.01 * fs)
+        old_ts = datetime.now() - timedelta(hours=1)
+        params_with_template.template_updated_at = old_ts
+        gui = TemplateSelectionGUI(filt, params_with_template)
+        gui._build_figure()
+        for pos in positions[:2]:
+            loc = pos - start_point
+            if 0 <= loc < len(filt):
+                gui._selected_indices.append(loc)
+
+        before = datetime.now()
+        template = gui._build_template()
+        after = datetime.now()
+        assert template is not None
+        assert gui.template_updated_at is not None
+        assert before <= gui.template_updated_at <= after
+        assert gui.template_updated_at != old_ts
+
 
 # ---------------------------------------------------------------------------
 # ThresholdGUI tests
@@ -556,8 +655,10 @@ class TestNonBlockingAPI:
         gui.setup()
         gui.finish()
         assert len(received) == 1
-        # No selection made -> template is None
-        assert received[0] is None
+        # No selection made + existing template in params -> existing kept
+        np.testing.assert_array_equal(
+            received[0], params_with_template.spike_template,
+        )
 
     def test_threshold_gui_on_finished_fires(self, match_result, params_with_template):
         gui = ThresholdGUI(match_result, params_with_template)
